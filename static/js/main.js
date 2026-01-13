@@ -1,13 +1,214 @@
 let currentUrl = '';
-let currentTaskId = null;
-let statusCheckInterval = null;
+
+// 下载任务管理器 - 使用 localStorage 持久化
+const TaskManager = {
+    STORAGE_KEY: 'youtube_download_tasks',
+
+    getTasks() {
+        const data = localStorage.getItem(this.STORAGE_KEY);
+        return data ? JSON.parse(data) : {};
+    },
+
+    saveTasks(tasks) {
+        localStorage.setItem(this.STORAGE_KEY, JSON.stringify(tasks));
+    },
+
+    addTask(taskId, title, quality) {
+        const tasks = this.getTasks();
+        tasks[taskId] = {
+            id: taskId,
+            title: title,
+            quality: quality,
+            status: 'pending',
+            progress: 0,
+            createdAt: Date.now()
+        };
+        this.saveTasks(tasks);
+        return tasks[taskId];
+    },
+
+    updateTask(taskId, updates) {
+        const tasks = this.getTasks();
+        if (tasks[taskId]) {
+            Object.assign(tasks[taskId], updates);
+            this.saveTasks(tasks);
+        }
+        return tasks[taskId];
+    },
+
+    removeTask(taskId) {
+        const tasks = this.getTasks();
+        delete tasks[taskId];
+        this.saveTasks(tasks);
+    },
+
+    getActiveTasks() {
+        const tasks = this.getTasks();
+        return Object.values(tasks).filter(t =>
+            t.status === 'pending' || t.status === 'downloading'
+        );
+    },
+
+    getCompletedTasks() {
+        const tasks = this.getTasks();
+        return Object.values(tasks).filter(t => t.status === 'completed');
+    },
+
+    clearCompleted() {
+        const tasks = this.getTasks();
+        for (const id in tasks) {
+            if (tasks[id].status === 'completed' || tasks[id].status === 'error') {
+                delete tasks[id];
+            }
+        }
+        this.saveTasks(tasks);
+    }
+};
+
+// 状态轮询管理
+let pollingIntervals = {};
+
+function startPolling(taskId) {
+    if (pollingIntervals[taskId]) return;
+
+    pollingIntervals[taskId] = setInterval(() => checkTaskStatus(taskId), 1000);
+}
+
+function stopPolling(taskId) {
+    if (pollingIntervals[taskId]) {
+        clearInterval(pollingIntervals[taskId]);
+        delete pollingIntervals[taskId];
+    }
+}
+
+async function checkTaskStatus(taskId) {
+    try {
+        const response = await fetch(`/api/status/${taskId}`);
+        const data = await response.json();
+
+        if (data.status === 'downloading') {
+            TaskManager.updateTask(taskId, {
+                status: 'downloading',
+                progress: data.progress || 0
+            });
+        } else if (data.status === 'completed') {
+            TaskManager.updateTask(taskId, {
+                status: 'completed',
+                progress: 100,
+                filename: data.filename
+            });
+            stopPolling(taskId);
+        } else if (data.status === 'error') {
+            TaskManager.updateTask(taskId, {
+                status: 'error',
+                error: data.error
+            });
+            stopPolling(taskId);
+        }
+
+        renderTaskQueue();
+    } catch (error) {
+        console.error('检查状态失败:', error);
+    }
+}
+
+function renderTaskQueue() {
+    const container = document.getElementById('task-queue');
+    if (!container) return;
+
+    const activeTasks = TaskManager.getActiveTasks();
+    const completedTasks = TaskManager.getCompletedTasks();
+    const allTasks = [...activeTasks, ...completedTasks];
+
+    if (allTasks.length === 0) {
+        container.classList.add('hidden');
+        return;
+    }
+
+    container.classList.remove('hidden');
+
+    const tasksHtml = allTasks.map(task => {
+        const shortTitle = task.title.length > 30
+            ? task.title.substring(0, 30) + '...'
+            : task.title;
+
+        let statusHtml = '';
+        let actionHtml = '';
+
+        if (task.status === 'pending' || task.status === 'downloading') {
+            statusHtml = `
+                <div class="task-progress">
+                    <div class="task-progress-bar" style="width: ${task.progress}%"></div>
+                </div>
+                <span class="task-percent">${task.progress}%</span>
+            `;
+        } else if (task.status === 'completed') {
+            statusHtml = '<span class="task-status-done">✓ 完成</span>';
+            actionHtml = `<button class="task-save-btn" onclick="downloadTaskFile('${task.id}')">保存</button>`;
+        } else if (task.status === 'error') {
+            statusHtml = '<span class="task-status-error">✗ 失败</span>';
+        }
+
+        return `
+            <div class="task-item" data-task-id="${task.id}">
+                <div class="task-info">
+                    <span class="task-title">${shortTitle}</span>
+                    <span class="task-quality">${task.quality}</span>
+                </div>
+                <div class="task-status">
+                    ${statusHtml}
+                    ${actionHtml}
+                    <button class="task-remove-btn" onclick="removeTask('${task.id}')" title="移除">×</button>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const activeCount = activeTasks.length;
+    const headerText = activeCount > 0
+        ? `下载队列 (${activeCount} 个进行中)`
+        : '下载队列';
+
+    container.innerHTML = `
+        <div class="task-queue-header">
+            <span>${headerText}</span>
+            ${completedTasks.length > 0 ? '<button class="clear-completed-btn" onclick="clearCompleted()">清除已完成</button>' : ''}
+        </div>
+        <div class="task-list">
+            ${tasksHtml}
+        </div>
+    `;
+}
+
+function downloadTaskFile(taskId) {
+    window.location.href = `/api/file/${taskId}`;
+}
+
+function removeTask(taskId) {
+    stopPolling(taskId);
+    TaskManager.removeTask(taskId);
+    renderTaskQueue();
+}
+
+function clearCompleted() {
+    TaskManager.clearCompleted();
+    renderTaskQueue();
+}
+
+// 初始化 - 恢复未完成的任务轮询
+function initTaskManager() {
+    const activeTasks = TaskManager.getActiveTasks();
+    activeTasks.forEach(task => {
+        startPolling(task.id);
+    });
+    renderTaskQueue();
+}
 
 async function fetchVideoInfo() {
     const urlInput = document.getElementById('url-input');
     const fetchBtn = document.getElementById('fetch-btn');
-    const errorMessage = document.getElementById('error-message');
     const videoInfo = document.getElementById('video-info');
-    const downloadProgress = document.getElementById('download-progress');
+    const fetchLoading = document.getElementById('fetch-loading');
 
     const url = urlInput.value.trim();
 
@@ -16,27 +217,22 @@ async function fetchVideoInfo() {
         return;
     }
 
-    // 验证URL格式
     if (!isValidYouTubeUrl(url)) {
         showError('请输入有效的YouTube视频链接');
         return;
     }
 
-    // 隐藏之前的信息
     hideError();
     videoInfo.classList.add('hidden');
-    downloadProgress.classList.add('hidden');
 
-    // 显示加载状态
     fetchBtn.disabled = true;
     fetchBtn.textContent = '获取中...';
+    fetchLoading.classList.remove('hidden');
 
     try {
         const response = await fetch('/api/info', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url }),
         });
 
@@ -54,6 +250,7 @@ async function fetchVideoInfo() {
     } finally {
         fetchBtn.disabled = false;
         fetchBtn.textContent = '获取视频';
+        fetchLoading.classList.add('hidden');
     }
 }
 
@@ -68,12 +265,18 @@ function displayVideoInfo(info) {
     title.textContent = info.title;
     duration.textContent = formatDuration(info.duration);
 
-    // 填充清晰度选项
     qualitySelect.innerHTML = '';
     info.formats.forEach(format => {
         const option = document.createElement('option');
         option.value = format.quality;
-        option.textContent = format.quality;
+
+        let sizeText = '';
+        if (format.size > 0) {
+            const sizeMB = (format.size / (1024 * 1024)).toFixed(1);
+            sizeText = ` (约 ${sizeMB} MB)`;
+        }
+
+        option.textContent = format.quality + sizeText;
         qualitySelect.appendChild(option);
     });
 
@@ -83,29 +286,20 @@ function displayVideoInfo(info) {
 async function startDownload() {
     const downloadBtn = document.getElementById('download-btn');
     const quality = document.getElementById('quality').value;
-    const downloadProgress = document.getElementById('download-progress');
-    const progressText = document.getElementById('progress-text');
-    const progressPercent = document.getElementById('progress-percent');
-    const progressFill = document.getElementById('progress-fill');
-    const downloadFileBtn = document.getElementById('download-file-btn');
+    const title = document.getElementById('video-title').textContent;
 
     downloadBtn.disabled = true;
-    downloadBtn.textContent = '开始下载...';
-
-    // 显示进度区域
-    downloadProgress.classList.remove('hidden');
-    downloadFileBtn.classList.add('hidden');
-    progressText.textContent = '准备下载...';
-    progressPercent.textContent = '0%';
-    progressFill.style.width = '0%';
+    downloadBtn.textContent = '添加中...';
 
     try {
         const response = await fetch('/api/download', {
             method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({ url: currentUrl, quality }),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                url: currentUrl,
+                quality,
+                title: title
+            }),
         });
 
         const data = await response.json();
@@ -114,67 +308,21 @@ async function startDownload() {
             throw new Error(data.error || '下载请求失败');
         }
 
-        currentTaskId = data.task_id;
-        progressText.textContent = '正在下载...';
+        // 添加到任务队列
+        TaskManager.addTask(data.task_id, title, quality);
+        startPolling(data.task_id);
+        renderTaskQueue();
 
-        // 开始轮询下载状态
-        statusCheckInterval = setInterval(checkDownloadStatus, 1000);
+        // 清空输入，准备下一个
+        document.getElementById('url-input').value = '';
+        document.getElementById('video-info').classList.add('hidden');
+        currentUrl = '';
 
     } catch (error) {
         showError(error.message);
+    } finally {
         downloadBtn.disabled = false;
         downloadBtn.textContent = '下载视频';
-    }
-}
-
-async function checkDownloadStatus() {
-    if (!currentTaskId) return;
-
-    try {
-        const response = await fetch(`/api/status/${currentTaskId}`);
-        const data = await response.json();
-
-        const progressText = document.getElementById('progress-text');
-        const progressPercent = document.getElementById('progress-percent');
-        const progressFill = document.getElementById('progress-fill');
-        const downloadBtn = document.getElementById('download-btn');
-        const downloadFileBtn = document.getElementById('download-file-btn');
-
-        if (data.status === 'downloading') {
-            const progress = data.progress || 0;
-            progressPercent.textContent = `${progress}%`;
-            progressFill.style.width = `${progress}%`;
-            progressText.textContent = '正在下载...';
-
-        } else if (data.status === 'completed') {
-            clearInterval(statusCheckInterval);
-            statusCheckInterval = null;
-
-            progressPercent.textContent = '100%';
-            progressFill.style.width = '100%';
-            progressText.textContent = '下载完成!';
-
-            downloadBtn.disabled = false;
-            downloadBtn.textContent = '下载视频';
-            downloadFileBtn.classList.remove('hidden');
-
-        } else if (data.status === 'error') {
-            clearInterval(statusCheckInterval);
-            statusCheckInterval = null;
-
-            showError(data.error || '下载失败');
-            downloadBtn.disabled = false;
-            downloadBtn.textContent = '下载视频';
-        }
-
-    } catch (error) {
-        console.error('检查状态失败:', error);
-    }
-}
-
-function downloadFile() {
-    if (currentTaskId) {
-        window.location.href = `/api/file/${currentTaskId}`;
     }
 }
 
@@ -211,12 +359,17 @@ function hideError() {
     errorElement.classList.remove('show');
 }
 
-// 回车键触发获取
+// 页面加载初始化
 document.addEventListener('DOMContentLoaded', () => {
     const urlInput = document.getElementById('url-input');
-    urlInput.addEventListener('keypress', (e) => {
-        if (e.key === 'Enter') {
-            fetchVideoInfo();
-        }
-    });
+    if (urlInput) {
+        urlInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                fetchVideoInfo();
+            }
+        });
+    }
+
+    // 初始化任务管理器
+    initTaskManager();
 });
