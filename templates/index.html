@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>YouTube Video Downloader</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>YouTube Video Downloader</h1>
+            <p class="subtitle">下载高清YouTube视频 - 支持720p/1080p及以上</p>
+        </header>
+
+        <main>
+            <div class="input-section">
+                <input
+                    type="text"
+                    id="url-input"
+                    placeholder="粘贴YouTube视频链接..."
+                    autocomplete="off"
+                >
+                <button id="fetch-btn" onclick="fetchVideoInfo()">获取视频</button>
+            </div>
+
+            <div id="error-message" class="error-message"></div>
+
+            <div id="video-info" class="video-info hidden">
+                <div class="video-preview">
+                    <img id="thumbnail" src="" alt="视频缩略图">
+                </div>
+                <div class="video-details">
+                    <h2 id="video-title"></h2>
+                    <p id="video-duration"></p>
+                    <div class="quality-selector">
+                        <label for="quality">选择清晰度:</label>
+                        <select id="quality"></select>
+                    </div>
+                    <button id="download-btn" onclick="startDownload()">下载视频</button>
+                </div>
+            </div>
+
+            <div id="download-progress" class="download-progress hidden">
+                <div class="progress-info">
+                    <span id="progress-text">准备下载...</span>
+                    <span id="progress-percent">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
+                <button id="download-file-btn" class="hidden" onclick="downloadFile()">保存到本地</button>
+            </div>
+        </main>
+
+        <footer>
+            <p>仅供个人学习使用</p>
+        </footer>
+    </div>
+
+    <script src="/static/js/main.js"></script>
+</body>
+</html>
